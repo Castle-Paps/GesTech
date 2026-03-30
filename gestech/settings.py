@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
 from pathlib import Path
+from decouple import config
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -24,6 +25,7 @@ SECRET_KEY = 'django-insecure-2xn!z0rur!*wk(@8)7pog9^sp&e7jr1y*zddgsyau+@ueth+#1
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
+
 
 ALLOWED_HOSTS = []
 
@@ -52,6 +54,7 @@ INSTALLED_APPS = [
     'ventas',
     'reparaciones',
     'finanzas',
+    "pagos"
 ]
 
 MIDDLEWARE = [
@@ -64,7 +67,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-
+    
 
 ]
 
@@ -155,3 +158,8 @@ CORS_ALLOWED_ORIGINS = [
     'http://localhost:5173',  # puerto por defecto de Vite/React
     'http://localhost:3000',  # puerto alternativo de React
 ]
+
+
+MERCADOPAGO_ACCESS_TOKEN = config("APP_USR-1070248094255982-033017-18165bd6c11bf8b6f9f3227dcf91a801-3302591035")
+MERCADOPAGO_WEBHOOK_SECRET = config("MP_WEBHOOK_SECRET", default="")
+#68496e8569780d949d40b96bee1337fba4cf0521fdbbfe587c8d26daf8a29976

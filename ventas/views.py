@@ -10,6 +10,7 @@ from .models import Cliente, MetodoPago, Venta, DetalleVenta, Recibo
 from .serializers import (ClienteSerializer, MetodoPagoSerializer,
                           VentaSerializer, CrearVentaSerializer, ReciboSerializer)
 from catalogo.models import Producto
+from inventario.services import descontar_stock  # ← importa el servicio
 
 
 class ClienteView(APIView):
@@ -49,7 +50,6 @@ class CrearVentaView(APIView):
 
     @transaction.atomic
     def post(self, request):
-        # transaction.atomic garantiza que si algo falla, nada se guarda
         serializer = CrearVentaSerializer(data=request.data)
 
         if not serializer.is_valid():
@@ -62,7 +62,6 @@ class CrearVentaView(APIView):
             return Response({'error': 'La venta debe tener al menos un producto'},
                             status=status.HTTP_400_BAD_REQUEST)
 
-        # Calcula el subtotal sumando cada línea de detalle
         subtotal = Decimal(0)
         items    = []
 
@@ -87,24 +86,20 @@ class CrearVentaView(APIView):
                 'subtotal':        subtotal_item,
             })
 
-        descuento = Decimal(str(data.get('descuento', 0)))
-        igv       = (subtotal - descuento) * Decimal('0.18')  # IGV 18%
-        total     = subtotal - descuento + igv
-
-        # Genera número de venta único
+        descuento    = Decimal(str(data.get('descuento', 0)))
+        igv          = (subtotal - descuento) * Decimal('0.18')
+        total        = subtotal - descuento + igv
         numero_venta = f"V-{uuid.uuid4().hex[:8].upper()}"
 
-        # Obtiene cliente y método de pago si vienen
         cliente_id     = data.get('cliente')
         metodo_pago_id = data.get('metodo_pago')
 
-        cliente     = Cliente.objects.get(pk=cliente_id)     if cliente_id     else None
+        cliente     = Cliente.objects.get(pk=cliente_id)        if cliente_id     else None
         metodo_pago = MetodoPago.objects.get(pk=metodo_pago_id) if metodo_pago_id else None
 
-        # Crea la venta
         venta = Venta.objects.create(
             cliente      = cliente,
-            vendedor     = request.user,  # el usuario autenticado es el vendedor
+            vendedor     = request.user,
             metodo_pago  = metodo_pago,
             numero_venta = numero_venta,
             tipo_venta   = data.get('tipo_venta', 'directa'),
@@ -114,7 +109,6 @@ class CrearVentaView(APIView):
             total        = total,
         )
 
-        # Crea cada línea de detalle
         for item in items:
             DetalleVenta.objects.create(
                 venta           = venta,
@@ -124,6 +118,18 @@ class CrearVentaView(APIView):
                 descuento_item  = item['descuento_item'],
                 subtotal        = item['subtotal'],
             )
+
+            # ← descuenta el stock automáticamente después de crear el detalle
+            try:
+                descontar_stock(
+                    producto   = item['producto'],
+                    cantidad   = item['cantidad'],
+                    usuario    = request.user,
+                    origen_id  = venta.id,
+                )
+            except ValueError as e:
+                # Si no hay stock suficiente cancela toda la venta
+                raise transaction.atomic.Rollback(str(e))
 
         return Response(VentaSerializer(venta).data, status=status.HTTP_201_CREATED)
 
@@ -154,14 +160,12 @@ class ReciboView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, venta_id):
-        # Genera el recibo de una venta existente
         try:
             venta = Venta.objects.get(pk=venta_id)
         except Venta.DoesNotExist:
             return Response({'error': 'Venta no encontrada'},
                             status=status.HTTP_404_NOT_FOUND)
 
-        # Verifica que no tenga ya un recibo
         if hasattr(venta, 'recibo'):
             return Response({'error': 'Esta venta ya tiene un recibo'},
                             status=status.HTTP_400_BAD_REQUEST)
@@ -169,14 +173,12 @@ class ReciboView(APIView):
         tipo_comprobante = request.data.get('tipo_comprobante', 'ticket')
         cliente_nombre   = request.data.get('cliente_nombre', '')
 
-        # Si tiene cliente registrado usa su nombre
         if venta.cliente and not cliente_nombre:
             cliente_nombre = venta.cliente.nombre
 
-        # Serie y número automático simple
         serie  = 'B001' if tipo_comprobante == 'boleta' else 'F001' if tipo_comprobante == 'factura' else 'T001'
         ultimo = Recibo.objects.filter(tipo_comprobante=tipo_comprobante, serie=serie).count()
-        numero = str(ultimo + 1).zfill(8)  # ej: 00000001
+        numero = str(ultimo + 1).zfill(8)
 
         recibo = Recibo.objects.create(
             venta            = venta,
