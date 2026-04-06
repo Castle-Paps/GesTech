@@ -1,128 +1,90 @@
-from django.db import models
-from django.conf import settings
-from catalogo.models import Producto
-from ventas.models import Cliente
+from rest_framework import serializers
+from .models import OrdenReparacion, PiezaUsada, ComprobanteReparacion
 
 
-class OrdenReparacion(models.Model):
-    ESTADO = [
-        ('recibido',     'Recibido'),        # equipo ingresado, sin revisar
-        ('diagnostico',  'En diagnóstico'),  # técnico evaluando
-        ('en_proceso',   'En proceso'),      # reparación en curso
-        ('esperando',    'Esperando pieza'), # falta una pieza
-        ('listo',        'Listo'),           # reparación terminada, por entregar
-        ('entregado',    'Entregado'),       # cliente retiró el equipo
-        ('sin_reparar',  'Sin reparar'),     # no se pudo reparar o cliente no quiso
-    ]
-    PRIORIDAD = [
-        ('normal',   'Normal'),
-        ('urgente',  'Urgente'),
-        ('express',  'Express'),
-    ]
+class PiezaUsadaSerializer(serializers.ModelSerializer):
+    producto_nombre = serializers.CharField(source='producto.nombre', read_only=True)
 
-    numero_or      = models.CharField(max_length=20, unique=True)
-    cliente        = models.ForeignKey(
-        Cliente, on_delete=models.PROTECT, related_name='reparaciones'
-    )
-    tecnico        = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.SET_NULL,
-        null=True, blank=True,
-        related_name='reparaciones_asignadas'
-    )
-    recibido_por   = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.PROTECT,
-        related_name='reparaciones_recibidas'
-    )
+    class Meta:
+        model  = PiezaUsada
+        fields = ['id', 'producto', 'producto_nombre', 'cantidad', 'precio_unitario']
+
+
+class OrdenReparacionSerializer(serializers.ModelSerializer):
+    piezas         = PiezaUsadaSerializer(many=True, read_only=True)
+    cliente_nombre = serializers.CharField(source='cliente.nombre',   read_only=True)
+    tecnico_nombre = serializers.CharField(source='tecnico.username', read_only=True, default='Sin asignar')
+
+    class Meta:
+        model  = OrdenReparacion
+        fields = [
+            'id', 'numero_or', 'estado', 'prioridad',
+            'cliente', 'cliente_nombre',
+            'tecnico', 'tecnico_nombre',
+            'tipo_equipo', 'marca', 'modelo', 'serie',
+            'descripcion_falla', 'accesorios', 'observaciones',
+            'diagnostico', 'trabajo_realizado',
+            'costo_mano_obra', 'costo_piezas', 'total',
+            'fecha_ingreso', 'fecha_entrega', 'fecha_prometida',
+            'piezas',
+        ]
+
+
+class CrearOrdenReparacionSerializer(serializers.Serializer):
+    # Datos del cliente
+    cliente          = serializers.IntegerField()
 
     # Datos del equipo
-    tipo_equipo    = models.CharField(max_length=100)          # ej: "Laptop", "PC", "Impresora"
-    marca          = models.CharField(max_length=100, blank=True)
-    modelo         = models.CharField(max_length=100, blank=True)
-    serie          = models.CharField(max_length=100, blank=True)
-    descripcion_falla = models.TextField()                     # lo que reporta el cliente
-    accesorios     = models.TextField(blank=True)              # cargador, mouse, etc.
-    observaciones  = models.TextField(blank=True)              # estado físico al ingresar
+    tipo_equipo      = serializers.CharField(max_length=100)
+    marca            = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    modelo           = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    serie            = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    descripcion_falla = serializers.CharField()
+    accesorios       = serializers.CharField(required=False, allow_blank=True)
+    observaciones    = serializers.CharField(required=False, allow_blank=True)
 
-    # Trabajo realizado
-    diagnostico    = models.TextField(blank=True)              # lo que encontró el técnico
-    trabajo_realizado = models.TextField(blank=True)
-
-    estado         = models.CharField(max_length=20, choices=ESTADO, default='recibido')
-    prioridad      = models.CharField(max_length=10, choices=PRIORIDAD, default='normal')
-
-    # Costos
-    costo_mano_obra = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-    costo_piezas    = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-    total           = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-
-    fecha_ingreso  = models.DateTimeField(auto_now_add=True)
-    fecha_entrega  = models.DateTimeField(null=True, blank=True)  # fecha real de entrega
-    fecha_prometida = models.DateField(null=True, blank=True)     # fecha prometida al cliente
-
-    class Meta:
-        db_table = 'ordenes_reparacion'
-        ordering = ['-fecha_ingreso']
-
-    def __str__(self):
-        return f"{self.numero_or} — {self.tipo_equipo} ({self.cliente.nombre})"
-
-    def recalcular_total(self):
-        """Recalcula costo_piezas y total desde las piezas usadas."""
-        from decimal import Decimal
-        costo_piezas = sum(
-            p.cantidad * p.precio_unitario for p in self.piezas.all()
-        )
-        self.costo_piezas = costo_piezas
-        self.total = Decimal(str(self.costo_mano_obra)) + costo_piezas
-        self.save(update_fields=['costo_piezas', 'total'])
-
-
-class PiezaUsada(models.Model):
-    """
-    Pieza del inventario utilizada en una reparación.
-    Al guardar descuenta el stock automáticamente.
-    """
-    orden           = models.ForeignKey(
-        OrdenReparacion, on_delete=models.CASCADE, related_name='piezas'
+    # Asignación y prioridad
+    tecnico          = serializers.IntegerField(required=False, allow_null=True)
+    prioridad        = serializers.ChoiceField(
+        choices=['normal', 'urgente', 'express'], default='normal'
     )
-    producto        = models.ForeignKey(Producto, on_delete=models.PROTECT)
-    cantidad        = models.IntegerField()
-    precio_unitario = models.DecimalField(max_digits=10, decimal_places=2)
-
-    class Meta:
-        db_table = 'piezas_usadas'
-
-    def __str__(self):
-        return f"{self.producto.nombre} x{self.cantidad} → OR {self.orden.numero_or}"
+    fecha_prometida  = serializers.DateField(required=False, allow_null=True)
+    costo_mano_obra  = serializers.DecimalField(max_digits=10, decimal_places=2, default=0)
 
 
-class ComprobanteReparacion(models.Model):
-    """Comprobante de cobro propio de la reparación (separado de ventas)."""
-    TIPO = [
-        ('boleta',  'Boleta'),
-        ('factura', 'Factura'),
-        ('ticket',  'Ticket'),
-    ]
-    ESTADO = [
-        ('emitido', 'Emitido'),
-        ('anulado', 'Anulado'),
-    ]
-
-    orden            = models.OneToOneField(
-        OrdenReparacion, on_delete=models.PROTECT, related_name='comprobante'
+class ActualizarOrdenSerializer(serializers.Serializer):
+    # Todos opcionales — solo se actualizan los que vienen
+    estado           = serializers.ChoiceField(
+        choices=['recibido', 'diagnostico', 'en_proceso',
+                 'esperando', 'listo', 'entregado', 'sin_reparar'],
+        required=False
     )
-    tipo_comprobante = models.CharField(max_length=10, choices=TIPO, default='ticket')
-    serie            = models.CharField(max_length=10)
-    numero           = models.CharField(max_length=10)
-    monto_total      = models.DecimalField(max_digits=10, decimal_places=2)
-    estado           = models.CharField(max_length=10, choices=ESTADO, default='emitido')
-    fecha_emision    = models.DateTimeField(auto_now_add=True)
+    tecnico          = serializers.IntegerField(required=False, allow_null=True)
+    prioridad        = serializers.ChoiceField(
+        choices=['normal', 'urgente', 'express'], required=False
+    )
+    diagnostico      = serializers.CharField(required=False, allow_blank=True)
+    trabajo_realizado = serializers.CharField(required=False, allow_blank=True)
+    costo_mano_obra  = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
+    fecha_prometida  = serializers.DateField(required=False, allow_null=True)
+    fecha_entrega    = serializers.DateTimeField(required=False, allow_null=True)
 
+
+class AgregarPiezaSerializer(serializers.Serializer):
+    producto_id     = serializers.IntegerField()
+    cantidad        = serializers.IntegerField(min_value=1)
+    precio_unitario = serializers.DecimalField(max_digits=10, decimal_places=2)
+
+
+class ComprobanteReparacionSerializer(serializers.ModelSerializer):
     class Meta:
-        db_table = 'comprobantes_reparacion'
-        unique_together = ('tipo_comprobante', 'serie', 'numero')
-
-    def __str__(self):
-        return f"{self.tipo_comprobante} {self.serie}-{self.numero}"
+        model  = ComprobanteReparacion
+        fields = ['id', 'orden', 'tipo_comprobante', 'serie',
+                  'numero', 'monto_total', 'estado', 'fecha_emision']
+        
+class EmitirComprobanteSerializer(serializers.Serializer):
+    tipo_comprobante = serializers.ChoiceField(
+        choices=['boleta', 'factura', 'ticket'],
+        default='ticket'
+    )
+    cliente_nombre   = serializers.CharField(max_length=150, required=False, allow_blank=True)

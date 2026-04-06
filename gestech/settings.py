@@ -11,7 +11,6 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
 from pathlib import Path
-from decouple import config
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -54,7 +53,7 @@ INSTALLED_APPS = [
     'ventas',
     'reparaciones',
     'finanzas',
-    "pagos"
+    'pagos'
 ]
 
 MIDDLEWARE = [
@@ -159,7 +158,9 @@ CORS_ALLOWED_ORIGINS = [
     'http://localhost:3000',  # puerto alternativo de React
 ]
 
+MERCADOPAGO_ACCESS_TOKEN  = 'APP_USR-8987935352958958-040603-942cc075266f88016a9a91eaf0a1f00d-3302873853'
+MERCADOPAGO_WEBHOOK_SECRET = '68496e8569780d949d40b96bee1337fba4cf0521fdbbfe587c8d26daf8a29976'
 
-MERCADOPAGO_ACCESS_TOKEN = config("APP_USR-1070248094255982-033017-18165bd6c11bf8b6f9f3227dcf91a801-3302591035")
-MERCADOPAGO_WEBHOOK_SECRET = config("MP_WEBHOOK_SECRET", default="")
-#68496e8569780d949d40b96bee1337fba4cf0521fdbbfe587c8d26daf8a29976
+DEFAULT_AUTO_FIELD = 'django.db.models.AutoField'
+
+

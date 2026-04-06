@@ -1,64 +1,44 @@
-"""
-pagos/views.py
-Endpoints Django para crear pagos y recibir webhooks de Mercado Pago.
-"""
+from django.views.decorators.csrf import csrf_exempt
+from django.utils.decorators import method_decorator
+from django.http import JsonResponse
+from django.views import View
+from ventas.models import Venta, Recibo
 import json
 import logging
 
-from django.http import JsonResponse
-from django.views import View
-from django.views.decorators.csrf import csrf_exempt
-from django.utils.decorators import method_decorator
+logger = logging.getLogger(__name__)
 
 from . import services
 
-logger = logging.getLogger(__name__)
-
-
-# ─── Crear pago ──────────────────────────────────────────────────────────────
 
 class CrearPagoView(View):
-    """
-    POST /pagos/crear/
-    Body JSON:
-    {
-        "token": "TOKEN_GENERADO_POR_CARDFORM",
-        "monto": 1500.00,
-        "descripcion": "Producto XYZ",
-        "email": "comprador@email.com",
-        "cuotas": 1,
-        "id_externo": "orden-42"   ← opcional, tu propio ID
-    }
-    """
-
     def post(self, request):
         try:
             body = json.loads(request.body)
         except json.JSONDecodeError:
             return JsonResponse({"error": "JSON inválido"}, status=400)
 
-        # Validar campos requeridos
         requeridos = ("token", "monto", "descripcion", "email")
-        faltantes = [c for c in requeridos if not body.get(c)]
+        faltantes  = [c for c in requeridos if not body.get(c)]
         if faltantes:
             return JsonResponse(
                 {"error": f"Campos requeridos: {', '.join(faltantes)}"}, status=400
             )
 
         resultado = services.crear_pago(
-            token=body["token"],
-            monto=body["monto"],
-            descripcion=body["descripcion"],
-            email_pagador=body["email"],
-            cuotas=int(body.get("cuotas", 1)),
-            id_externo=body.get("id_externo"),
+            token         = body["token"],
+            monto         = body["monto"],
+            descripcion   = body["descripcion"],
+            email_pagador = body["email"],
+            cuotas        = int(body.get("cuotas", 1)),
+            id_externo    = body.get("id_externo"),
         )
 
         if not resultado["ok"]:
             return JsonResponse(
                 {
-                    "error": "Pago rechazado o fallido",
-                    "status": resultado["status"],
+                    "error":         "Pago rechazado o fallido",
+                    "status":        resultado["status"],
                     "status_detail": resultado["status_detail"],
                 },
                 status=422,
@@ -66,21 +46,15 @@ class CrearPagoView(View):
 
         return JsonResponse(
             {
-                "payment_id": resultado["payment_id"],
-                "status": resultado["status"],
+                "payment_id":    resultado["payment_id"],
+                "status":        resultado["status"],
                 "status_detail": resultado["status_detail"],
             },
             status=201,
         )
 
 
-# ─── Consultar pago ──────────────────────────────────────────────────────────
-
 class ConsultarPagoView(View):
-    """
-    GET /pagos/<payment_id>/
-    """
-
     def get(self, request, payment_id):
         resultado = services.consultar_pago(payment_id)
         if not resultado["ok"]:
@@ -90,26 +64,12 @@ class ConsultarPagoView(View):
         )
 
 
-# ─── Webhook ─────────────────────────────────────────────────────────────────
-
 @method_decorator(csrf_exempt, name="dispatch")
 class WebhookView(View):
-    """
-    POST /pagos/webhook/
-
-    Mercado Pago envía una notificación cada vez que cambia el estado
-    de un pago. Este endpoint valida la firma y procesa el evento.
-
-    Configura la URL en:
-    https://www.mercadopago.com/developers/panel → Tu integración → Webhooks
-    """
-
     def post(self, request):
-        # 1. Leer cabeceras de seguridad
-        x_signature = request.headers.get("x-signature", "")
+        x_signature  = request.headers.get("x-signature", "")
         x_request_id = request.headers.get("x-request-id", "")
 
-        # 2. Parsear cuerpo
         try:
             payload = json.loads(request.body)
         except json.JSONDecodeError:
@@ -117,42 +77,73 @@ class WebhookView(View):
 
         data_id = str(payload.get("data", {}).get("id", ""))
 
-        # 3. Validar firma HMAC
         if x_signature and not services.validar_firma_webhook(
             x_signature, x_request_id, data_id
         ):
             logger.warning("Webhook MP: firma inválida rechazada.")
             return JsonResponse({"error": "Firma inválida"}, status=403)
 
-        # 4. Procesar según el tipo de evento
         tipo = payload.get("type")
         logger.info("Webhook MP recibido: type=%s data_id=%s", tipo, data_id)
 
         if tipo == "payment":
             self._procesar_pago(data_id)
 
-        # Siempre responde 200 para que MP no reintente
         return JsonResponse({"ok": True}, status=200)
 
     def _procesar_pago(self, payment_id: str):
-        """Consulta el pago actualizado y aplica lógica de negocio."""
         resultado = services.consultar_pago(payment_id)
         if not resultado["ok"]:
             logger.error("No se pudo consultar pago %s en webhook", payment_id)
             return
 
-        status = resultado["status"]
-        logger.info("Pago %s → status=%s detail=%s", payment_id, status, resultado["status_detail"])
+        mp_status        = resultado["status"]
+        external_ref     = resultado["raw"].get("external_reference")
 
-        # ── Aquí va tu lógica de negocio ────────────────────────────────────
-        if status == "approved":
-            # Ej: marcar orden como pagada en tu BD
-            # Orden.objects.filter(payment_id=payment_id).update(estado="pagada")
-            logger.info("✅ Pago %s APROBADO — activar servicio/orden", payment_id)
+        logger.info("Pago %s → status=%s", payment_id, mp_status)
 
-        elif status == "pending":
-            logger.info("⏳ Pago %s PENDIENTE — esperando confirmación", payment_id)
+        if not external_ref:
+            logger.warning("Pago %s sin external_reference", payment_id)
+            return
 
-        elif status in ("rejected", "cancelled"):
-            logger.warning("❌ Pago %s %s — notificar al usuario", payment_id, status)
-        # ────────────────────────────────────────────────────────────────────
+        # Busca la venta por numero_venta
+        try:
+            venta = Venta.objects.get(numero_venta=external_ref)
+        except Venta.DoesNotExist:
+            logger.error("Venta %s no encontrada", external_ref)
+            return
+
+        # Actualiza los campos de Mercado Pago
+        venta.mp_payment_id = str(payment_id)
+        venta.mp_status     = mp_status
+
+        if mp_status == "approved":
+            venta.estado = "completada"
+            venta.save()
+            logger.info("Venta %s completada", external_ref)
+
+            # Genera el recibo automáticamente si no tiene uno
+            if not hasattr(venta, 'recibo'):
+                cliente_nombre = venta.cliente.nombre if venta.cliente else "Cliente General"
+                ultimo = Recibo.objects.filter(
+                    tipo_comprobante='ticket', serie='T001'
+                ).count()
+                numero = str(ultimo + 1).zfill(8)
+                Recibo.objects.create(
+                    venta            = venta,
+                    tipo_comprobante = 'ticket',
+                    serie            = 'T001',
+                    numero           = numero,
+                    cliente_nombre   = cliente_nombre,
+                    monto_total      = venta.total,
+                )
+                logger.info("Recibo generado para venta %s", external_ref)
+
+        elif mp_status in ("rejected", "cancelled"):
+            venta.estado = "anulada"
+            venta.save()
+            logger.warning("Venta %s anulada por pago %s", external_ref, mp_status)
+
+        else:
+            # pending — guarda el estado pero no cambia la venta
+            venta.save()

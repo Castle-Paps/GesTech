@@ -65,7 +65,7 @@ class OrdenReparacionListView(APIView):
 
         # Validar cliente
         try:
-            cliente = Cliente.objects.get(pk=data['cliente_id'])
+            cliente = Cliente.objects.get(pk=data['cliente'])
         except Cliente.DoesNotExist:
             return Response({'error': 'Cliente no encontrado'},
                             status=status.HTTP_404_NOT_FOUND)

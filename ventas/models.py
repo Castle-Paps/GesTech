@@ -46,12 +46,17 @@ class Venta(models.Model):
     metodo_pago    = models.ForeignKey(MetodoPago, on_delete=models.SET_NULL, null=True, blank=True)
     numero_venta   = models.CharField(max_length=20, unique=True)
     tipo_venta     = models.CharField(max_length=20, choices=TIPO_VENTA, default='directa')
-    estado         = models.CharField(max_length=20, choices=ESTADO,     default='completada')
+    estado         = models.CharField(max_length=20, choices=ESTADO, default='pendiente')
     subtotal       = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     descuento      = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     igv            = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     total          = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     fecha_venta    = models.DateTimeField(auto_now_add=True)
+
+    # Campos de Mercado Pago
+    mp_preference_id = models.CharField(max_length=255, null=True, blank=True)
+    mp_payment_id    = models.CharField(max_length=255, null=True, blank=True)
+    mp_status        = models.CharField(max_length=50,  null=True, blank=True)
 
     class Meta:
         db_table = 'ventas'
@@ -99,3 +104,5 @@ class Recibo(models.Model):
 
     def __str__(self):
         return f"{self.tipo_comprobante} {self.serie}-{self.numero}"
+    
+    

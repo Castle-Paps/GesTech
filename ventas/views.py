@@ -5,6 +5,10 @@ from rest_framework.permissions import IsAuthenticated
 from django.db import transaction
 from decimal import Decimal
 import uuid
+from django.views.decorators.csrf import csrf_exempt
+from django.utils.decorators import method_decorator
+from .services_mp import crear_preferencia
+
 
 from .models import Cliente, MetodoPago, Venta, DetalleVenta, Recibo
 from .serializers import (ClienteSerializer, MetodoPagoSerializer,
@@ -190,3 +194,89 @@ class ReciboView(APIView):
         )
 
         return Response(ReciboSerializer(recibo).data, status=status.HTTP_201_CREATED)
+    
+
+
+
+
+class CrearPagoMPView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, venta_id):
+        try:
+            venta = Venta.objects.get(pk=venta_id)
+        except Venta.DoesNotExist:
+            return Response({'error': 'Venta no encontrada'},
+                            status=status.HTTP_404_NOT_FOUND)
+
+        if venta.estado == 'completada':
+            return Response({'error': 'Esta venta ya fue pagada'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            preferencia = crear_preferencia(venta)
+            venta.mp_preference_id = preferencia['id']
+            venta.save()
+
+            return Response({
+                'preference_id':      preferencia['id'],
+                'init_point':         preferencia['init_point'],
+                'sandbox_init_point': preferencia['sandbox_init_point'],
+            })
+        except Exception as e:
+            return Response({'error': str(e)},
+                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class WebhookMPView(APIView):
+    permission_classes     = []
+    authentication_classes = []
+
+    def post(self, request):
+        data = request.data
+
+        if data.get('type') == 'payment':
+            payment_id = data.get('data', {}).get('id')
+            if not payment_id:
+                return Response(status=200)
+
+            try:
+                import mercadopago
+                from django.conf import settings
+                sdk  = mercadopago.SDK(settings.MERCADOPAGO_ACCESS_TOKEN)
+                pago = sdk.payment().get(payment_id)['response']
+
+                numero_venta = pago.get('external_reference')
+                mp_status    = pago.get('status')
+
+                venta = Venta.objects.get(numero_venta=numero_venta)
+                venta.mp_payment_id = str(payment_id)
+                venta.mp_status     = mp_status
+
+                if mp_status == 'approved':
+                    venta.estado = 'completada'
+                    venta.save()
+
+                    if not hasattr(venta, 'recibo'):
+                        cliente_nombre = venta.cliente.nombre if venta.cliente else 'Cliente General'
+                        ultimo = Recibo.objects.filter(tipo_comprobante='ticket', serie='T001').count()
+                        numero = str(ultimo + 1).zfill(8)
+                        Recibo.objects.create(
+                            venta            = venta,
+                            tipo_comprobante = 'ticket',
+                            serie            = 'T001',
+                            numero           = numero,
+                            cliente_nombre   = cliente_nombre,
+                            monto_total      = venta.total,
+                        )
+                elif mp_status in ('rejected', 'cancelled'):
+                    venta.estado = 'anulada'
+                    venta.save()
+                else:
+                    venta.save()
+
+            except Exception as e:
+                print(f"Error webhook: {e}")
+
+        return Response(status=200)
