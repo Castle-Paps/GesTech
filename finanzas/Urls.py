@@ -3,7 +3,7 @@ from .views import (
     CategoriaGastoView,
     GastoListView, GastoDetalleView,
     AbrirCajaView, CerrarCajaView, CajaListView, CajaActivaView,
-    ReporteIngresosView, ReporteEgresosView, ReporteResumenView,
+    ReporteIngresosView, ReporteEgresosView, ReporteResumenView, ReporteMargenView,
 )
 
 urlpatterns = [
@@ -24,4 +24,5 @@ urlpatterns = [
     path('reportes/ingresos/',       ReporteIngresosView.as_view(), name='reporte-ingresos'),
     path('reportes/egresos/',        ReporteEgresosView.as_view(),  name='reporte-egresos'),
     path('reportes/resumen/',        ReporteResumenView.as_view(),  name='reporte-resumen'),
+    path('reportes/margen/',         ReporteMargenView.as_view(),   name='reporte-margen'),
 ]

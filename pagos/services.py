@@ -137,8 +137,6 @@ def validar_firma_webhook(x_signature: str, x_request_id: str, data_id: str) -> 
     firma_recibida = parts.get("v1", "")
 
     mensaje = f"id:{data_id};request-id:{x_request_id};ts:{ts};"
-    firma_esperada = hmac.new(
-        secret.encode(), mensaje.encode(), hashlib.sha256
-    ).hexdigest()
+    firma_esperada = hmac.new(secret.encode(), mensaje.encode(), hashlib.sha256).hexdigest()
 
     return hmac.compare_digest(firma_esperada, firma_recibida)

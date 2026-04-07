@@ -128,7 +128,6 @@ class AbrirCajaView(APIView):
         """
         hoy = timezone.localdate()
 
-        # Verificar si ya existe una caja abierta hoy
         if CajaDiaria.objects.filter(cajero=request.user, fecha=hoy).exists():
             return Response(
                 {'error': 'Ya existe una caja para hoy. Ciérrala antes de abrir otra.'},
@@ -156,7 +155,8 @@ class CerrarCajaView(APIView):
 
     def post(self, request, pk):
         """
-        Cierra la caja, calcula el monto esperado y la diferencia.
+        Cierra la caja, calcula el monto esperado (incluyendo gastos del día)
+        y la diferencia contra lo que el cajero declara.
         """
         try:
             caja = CajaDiaria.objects.get(pk=pk, cajero=request.user)
@@ -174,7 +174,7 @@ class CerrarCajaView(APIView):
 
         data = serializer.validated_data
 
-        # Calcular monto esperado usando el servicio
+        # resumen_caja ahora descuenta los gastos del día correctamente
         resumen        = services.resumen_caja(caja)
         monto_esperado = resumen['monto_esperado']
         monto_cierre   = data['monto_cierre']
@@ -201,11 +201,42 @@ class CajaListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        """Lista el historial de cajas del usuario. ?estado=abierta"""
-        qs     = CajaDiaria.objects.filter(cajero=request.user)
-        estado = request.query_params.get('estado')
+        """
+        Lista cajas.
+        - Usuarios normales: solo ven sus propias cajas.
+        - Staff/admin: pueden ver todas las cajas con ?todos=true,
+          o filtrar por cajero con ?cajero_id=N.
+
+        Filtros:
+        ?estado=abierta|cerrada
+        ?fecha_inicio=2025-01-01&fecha_fin=2025-01-31
+        ?todos=true          (solo staff)
+        ?cajero_id=N         (solo staff)
+        """
+        es_admin = request.user.is_staff or request.user.is_superuser
+
+        # Determinar scope
+        ver_todos  = es_admin and request.query_params.get('todos', '').lower() == 'true'
+        cajero_id  = request.query_params.get('cajero_id')
+
+        if ver_todos or (es_admin and cajero_id):
+            qs = CajaDiaria.objects.select_related('cajero').all()
+            if cajero_id:
+                qs = qs.filter(cajero_id=cajero_id)
+        else:
+            # Vista normal: solo las propias
+            qs = CajaDiaria.objects.filter(cajero=request.user)
+
+        # Filtros comunes
+        estado       = request.query_params.get('estado')
+        fecha_inicio = request.query_params.get('fecha_inicio')
+        fecha_fin    = request.query_params.get('fecha_fin')
+
         if estado:
             qs = qs.filter(estado=estado)
+        if fecha_inicio and fecha_fin:
+            qs = qs.filter(fecha__range=(fecha_inicio, fecha_fin))
+
         return Response(CajaDiariaSerializer(qs, many=True).data)
 
 
@@ -225,71 +256,66 @@ class CajaActivaView(APIView):
 
 # ─── Reportes financieros ─────────────────────────────────────────────────────
 
+def _validar_fechas(request):
+    """Helper para extraer y validar fechas de query params. Retorna (inicio, fin, error)."""
+    fecha_inicio = request.query_params.get('fecha_inicio')
+    fecha_fin    = request.query_params.get('fecha_fin')
+    if not fecha_inicio or not fecha_fin:
+        err = Response(
+            {'error': 'Se requieren fecha_inicio y fecha_fin (YYYY-MM-DD)'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+        return None, None, err
+    return fecha_inicio, fecha_fin, None
+
+
 class ReporteIngresosView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        """
-        GET /api/finanzas/reportes/ingresos/?fecha_inicio=2025-01-01&fecha_fin=2025-01-31
-        """
-        fecha_inicio = request.query_params.get('fecha_inicio')
-        fecha_fin    = request.query_params.get('fecha_fin')
-
-        if not fecha_inicio or not fecha_fin:
-            return Response({'error': 'Se requieren fecha_inicio y fecha_fin (YYYY-MM-DD)'},
-                            status=status.HTTP_400_BAD_REQUEST)
-
+        fecha_inicio, fecha_fin, err = _validar_fechas(request)
+        if err: return err
         try:
-            reporte = services.reporte_ingresos(fecha_inicio, fecha_fin)
-        except ValueError:
-            return Response({'error': 'Formato de fecha inválido. Usa YYYY-MM-DD'},
-                            status=status.HTTP_400_BAD_REQUEST)
-
-        return Response(reporte)
+            return Response(services.reporte_ingresos(fecha_inicio, fecha_fin))
+        except ValueError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
 class ReporteEgresosView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        """
-        GET /api/finanzas/reportes/egresos/?fecha_inicio=2025-01-01&fecha_fin=2025-01-31
-        """
-        fecha_inicio = request.query_params.get('fecha_inicio')
-        fecha_fin    = request.query_params.get('fecha_fin')
-
-        if not fecha_inicio or not fecha_fin:
-            return Response({'error': 'Se requieren fecha_inicio y fecha_fin (YYYY-MM-DD)'},
-                            status=status.HTTP_400_BAD_REQUEST)
-
+        fecha_inicio, fecha_fin, err = _validar_fechas(request)
+        if err: return err
         try:
-            reporte = services.reporte_egresos(fecha_inicio, fecha_fin)
-        except ValueError:
-            return Response({'error': 'Formato de fecha inválido. Usa YYYY-MM-DD'},
-                            status=status.HTTP_400_BAD_REQUEST)
-
-        return Response(reporte)
+            return Response(services.reporte_egresos(fecha_inicio, fecha_fin))
+        except ValueError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
 class ReporteResumenView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        """
-        Resumen financiero completo del período.
-        GET /api/finanzas/reportes/resumen/?fecha_inicio=2025-01-01&fecha_fin=2025-01-31
-        """
-        fecha_inicio = request.query_params.get('fecha_inicio')
-        fecha_fin    = request.query_params.get('fecha_fin')
-
-        if not fecha_inicio or not fecha_fin:
-            return Response({'error': 'Se requieren fecha_inicio y fecha_fin (YYYY-MM-DD)'},
-                            status=status.HTTP_400_BAD_REQUEST)
-
+        fecha_inicio, fecha_fin, err = _validar_fechas(request)
+        if err: return err
         try:
-            reporte = services.reporte_resumen(fecha_inicio, fecha_fin)
-        except ValueError:
-            return Response({'error': 'Formato de fecha inválido. Usa YYYY-MM-DD'},
-                            status=status.HTTP_400_BAD_REQUEST)
+            return Response(services.reporte_resumen(fecha_inicio, fecha_fin))
+        except ValueError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
-        return Response(reporte)
+
+class ReporteMargenView(APIView):
+    """
+    Reporte de margen bruto por producto.
+    GET /api/finanzas/reportes/margen/?fecha_inicio=2025-01-01&fecha_fin=2025-01-31
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        fecha_inicio, fecha_fin, err = _validar_fechas(request)
+        if err: return err
+        try:
+            return Response(services.reporte_margen_productos(fecha_inicio, fecha_fin))
+        except ValueError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
