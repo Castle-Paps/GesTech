@@ -1,20 +1,22 @@
 from .models import Inventario, Movimiento
 
 
-def descontar_stock(producto, cantidad, usuario, origen_id):
-    # Busca o crea el inventario del producto
+def descontar_stock(producto, cantidad, usuario, origen_id, origen_tipo='venta', notas=None):
+    """
+    Descuenta stock del producto. Lanza ValueError si no hay suficiente stock.
+    """
     inventario, _ = Inventario.objects.get_or_create(producto=producto)
 
     if inventario.stock_actual < cantidad:
-        # No permite vender si no hay suficiente stock
-        raise ValueError(f"Stock insuficiente para {producto.nombre}. "
-                         f"Stock actual: {inventario.stock_actual}")
+        raise ValueError(
+            f'Stock insuficiente para {producto.nombre}. '
+            f'Stock actual: {inventario.stock_actual}, solicitado: {cantidad}.'
+        )
 
-    stock_antes           = inventario.stock_actual
+    stock_antes              = inventario.stock_actual
     inventario.stock_actual -= cantidad
-    inventario.save()
+    inventario.save(update_fields=['stock_actual', 'ultima_actualizacion'])
 
-    # Registra el movimiento
     Movimiento.objects.create(
         producto      = producto,
         usuario       = usuario,
@@ -22,19 +24,21 @@ def descontar_stock(producto, cantidad, usuario, origen_id):
         cantidad      = cantidad,
         stock_antes   = stock_antes,
         stock_despues = inventario.stock_actual,
-        origen_tipo   = 'venta',
+        origen_tipo   = origen_tipo,
         origen_id     = origen_id,
+        notas         = notas,
     )
-
     return inventario
 
 
 def aumentar_stock(producto, cantidad, usuario, origen_tipo, origen_id, notas=None):
-    inventario, _ = Inventario.objects.get_or_create(producto=producto)
-
+    """
+    Aumenta el stock del producto y registra el movimiento.
+    """
+    inventario, _            = Inventario.objects.get_or_create(producto=producto)
     stock_antes              = inventario.stock_actual
     inventario.stock_actual += cantidad
-    inventario.save()
+    inventario.save(update_fields=['stock_actual', 'ultima_actualizacion'])
 
     Movimiento.objects.create(
         producto      = producto,
@@ -47,17 +51,17 @@ def aumentar_stock(producto, cantidad, usuario, origen_tipo, origen_id, notas=No
         origen_id     = origen_id,
         notas         = notas,
     )
-
     return inventario
 
 
 def ajustar_stock(producto, cantidad_nueva, usuario, notas=None):
-    # Ajuste manual — el almacenero corrige el stock real
-    inventario, _ = Inventario.objects.get_or_create(producto=producto)
-
+    """
+    Ajuste manual: el almacenero corrige el stock real al valor exacto.
+    """
+    inventario, _           = Inventario.objects.get_or_create(producto=producto)
     stock_antes             = inventario.stock_actual
     inventario.stock_actual = cantidad_nueva
-    inventario.save()
+    inventario.save(update_fields=['stock_actual', 'ultima_actualizacion'])
 
     Movimiento.objects.create(
         producto      = producto,
@@ -69,5 +73,4 @@ def ajustar_stock(producto, cantidad_nueva, usuario, notas=None):
         origen_tipo   = 'ajuste_manual',
         notas         = notas,
     )
-
     return inventario
